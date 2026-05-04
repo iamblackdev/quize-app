@@ -15,7 +15,9 @@ export interface QuizQuestion {
   options: QuizOption[]
   correctAnswers: string[] // option ids
   explanation: string
+  mode?: QuizMode // 'theory' or 'diagram' — set by the model in mixed-mode quizzes so we know which questions deserve a rendered figure
   imageDescription?: string // for diagram questions
+  imageData?: string // data: URL of the rendered source PDF page, used for diagram-mode questions
   pageReference?: string // e.g., "12" or "12-13" — page in source PDF
   sourceFile?: string // filename of the source PDF the page reference belongs to
   fromPastPaper?: boolean // true if this question was lifted/adapted from uploaded past papers
@@ -26,7 +28,7 @@ export interface QuizConfig {
   questionCount: number
   difficulty: Difficulty
   questionTypes: QuestionType[]
-  mode: QuizMode
+  mode: QuizMode[]
   contextText?: string
   contextFileNames?: string[]
   pastQuestionsFileNames?: string[]

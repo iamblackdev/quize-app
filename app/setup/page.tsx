@@ -3,9 +3,10 @@
 import { useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { QuizConfig, QuestionType, Difficulty, QuizMode } from '@/types'
+import { QuizConfig, QuestionType, Difficulty, QuizMode, QuizQuestion } from '@/types'
 import { saveSession } from '@/lib/storage'
 import { v4 as uuidv4 } from 'uuid'
+import { renderPdfPageToDataUrl } from '@/lib/pdfRender'
 
 const QUESTION_TYPES: { id: QuestionType; label: string; desc: string; icon: string }[] = [
   { id: 'single', label: 'Single Choice', desc: 'One correct answer', icon: '◎' },
@@ -52,6 +53,43 @@ function formatMB(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
+// In diagram mode, render the referenced PDF page for each question into a JPEG
+// data URL and attach it so the quiz UI can display the actual figure alongside
+// the question. PDFs without a usable page reference quietly fall through.
+async function attachPageImages(
+  questions: QuizQuestion[],
+  courseFiles: File[],
+  onProgress: (msg: string) => void,
+): Promise<QuizQuestion[]> {
+  const filesByName = new Map(courseFiles.map(f => [f.name, f]))
+  const out: QuizQuestion[] = []
+
+  for (let i = 0; i < questions.length; i++) {
+    const q = questions[i]
+    // Mixed mode: Claude tags each question as 'theory' or 'diagram'. Skip theory ones so
+    // we don't attach a figure to a question that wasn't meant to need one. Untagged
+    // questions still get the image (single-mode diagram quizzes don't need the tag).
+    if (q.mode === 'theory') {
+      out.push(q)
+      continue
+    }
+    const file = q.sourceFile ? filesByName.get(q.sourceFile) : undefined
+    if (file && q.pageReference && file.type === 'application/pdf') {
+      onProgress(`Rendering diagram ${i + 1} of ${questions.length}… 🖼️`)
+      try {
+        const imageData = await renderPdfPageToDataUrl(file, q.pageReference)
+        out.push(imageData ? { ...q, imageData } : q)
+        continue
+      } catch (err) {
+        console.warn('PDF page render failed for', q.sourceFile, q.pageReference, err)
+      }
+    }
+    out.push(q)
+  }
+
+  return out
+}
+
 function validateUploads(courseFiles: File[], pastFiles: File[]): string | null {
   const all = [...courseFiles, ...pastFiles]
 
@@ -77,7 +115,7 @@ export default function SetupPage() {
   const [questionCount, setQuestionCount] = useState(10)
   const [difficulty, setDifficulty] = useState<Difficulty>('medium')
   const [selectedTypes, setSelectedTypes] = useState<QuestionType[]>(['single'])
-  const [mode, setMode] = useState<QuizMode>('theory')
+  const [modes, setModes] = useState<QuizMode[]>(['theory'])
   const [contextText, setContextText] = useState('')
   const [uploadedFiles, setUploadedFiles] = useState<File[]>([])
   const [pastQuestionsFiles, setPastQuestionsFiles] = useState<File[]>([])
@@ -107,6 +145,12 @@ export default function SetupPage() {
   const toggleType = (type: QuestionType) => {
     setSelectedTypes(prev =>
       prev.includes(type) ? (prev.length > 1 ? prev.filter(t => t !== type) : prev) : [...prev, type]
+    )
+  }
+
+  const toggleMode = (m: QuizMode) => {
+    setModes(prev =>
+      prev.includes(m) ? (prev.length > 1 ? prev.filter(x => x !== m) : prev) : [...prev, m]
     )
   }
 
@@ -145,7 +189,7 @@ export default function SetupPage() {
         questionCount,
         difficulty,
         questionTypes: selectedTypes,
-        mode,
+        mode: modes,
         contextText: contextText.trim() || undefined,
         contextFileNames: uploadedFiles.map(f => f.name),
         pastQuestionsFileNames: pastQuestionsFiles.map(f => f.name),
@@ -166,7 +210,11 @@ export default function SetupPage() {
         const body = await res.json().catch(() => null) as { error?: string } | null
         throw new Error(body?.error || 'Something went wrong generating your quiz. Please try again.')
       }
-      const { questions } = await res.json()
+      const { questions } = await res.json() as { questions: QuizQuestion[] }
+
+      const enrichedQuestions = modes.includes('diagram')
+        ? await attachPageImages(questions, uploadedFiles, setLoadingMsg)
+        : questions
 
       const sessionId = uuidv4()
       const now = new Date().toISOString()
@@ -174,7 +222,7 @@ export default function SetupPage() {
       saveSession({
         id: sessionId,
         config,
-        questions,
+        questions: enrichedQuestions,
         answers: [],
         currentQuestionIndex: 0,
         status: 'in-progress',
@@ -410,29 +458,32 @@ export default function SetupPage() {
 
         {/* Mode */}
         <div className="animate-fade-slide-up stagger-4">
-          <label className="label">Question Mode</label>
+          <label className="label">Question Mode <span className="font-normal text-charcoal-light">(pick one or both)</span></label>
           <div className="grid grid-cols-2 gap-3">
             {([
               { id: 'theory' as QuizMode, label: 'Theory', desc: 'Concepts, mechanisms & pharmacology', icon: '📖' },
               { id: 'diagram' as QuizMode, label: 'Diagram', desc: 'Identify structures & interpret findings', icon: '🫀' },
-            ] as const).map(m => (
-              <button
-                key={m.id}
-                onClick={() => setMode(m.id)}
-                className={`p-4 rounded-xl border-2 text-left transition-all duration-200
-                  ${mode === m.id
-                    ? 'border-amber-warm bg-amber-warm/10 shadow-sm'
-                    : 'border-amber-light/30 bg-white/50 hover:border-amber-warm/40'}`}
-              >
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="text-xl">{m.icon}</span>
-                  <span className={`font-display font-bold text-sm ${mode === m.id ? 'text-amber-dark' : 'text-charcoal-warm'}`}>
-                    {m.label}
-                  </span>
-                </div>
-                <p className="text-xs text-charcoal-light font-body">{m.desc}</p>
-              </button>
-            ))}
+            ] as const).map(m => {
+              const selected = modes.includes(m.id)
+              return (
+                <button
+                  key={m.id}
+                  onClick={() => toggleMode(m.id)}
+                  className={`p-4 rounded-xl border-2 text-left transition-all duration-200
+                    ${selected
+                      ? 'border-amber-warm bg-amber-warm/10 shadow-sm'
+                      : 'border-amber-light/30 bg-white/50 hover:border-amber-warm/40'}`}
+                >
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-xl">{m.icon}</span>
+                    <span className={`font-display font-bold text-sm ${selected ? 'text-amber-dark' : 'text-charcoal-warm'}`}>
+                      {m.label}
+                    </span>
+                  </div>
+                  <p className="text-xs text-charcoal-light font-body">{m.desc}</p>
+                </button>
+              )
+            })}
           </div>
         </div>
 

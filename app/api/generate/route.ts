@@ -44,11 +44,35 @@ export async function POST(req: NextRequest) {
     const courseFileList = courseFiles.map(f => f.name).join(', ') || 'none'
     const pastFileList = pastFiles.map(f => f.name).join(', ') || 'none'
 
+    const modes = Array.isArray(config.mode) ? config.mode : [config.mode]
+    const wantsTheory = modes.includes('theory')
+    const wantsDiagram = modes.includes('diagram')
+    const isMixed = wantsTheory && wantsDiagram
+
+    const theoryDescription = 'THEORY questions: focus on concepts, mechanisms, pathophysiology, pharmacology, anatomy. Standard text-only stems.'
+
+    const diagramDescription = [
+      'DIAGRAM questions: the student will be shown the actual page from the source PDF (when available) next to the question. Build the question around a specific diagram, illustration, photo, or labeled figure.',
+      '',
+      'When you anchor a diagram question to a real PDF page, the student sees the ENTIRE page including all text printed on it. The answer must NOT be obtainable by reading the surrounding text — only by looking at the figure itself:',
+      '- Read every word of text on the chosen page. If your candidate answer (or its synonym, or its definition) appears anywhere in that text, that question is INVALID — pick a different detail or page.',
+      '- Prefer: small labels inside the figure that the slide text does NOT discuss; spatial relationships between two labeled structures; what a labeled arrow/number/letter points to when the slide text doesn\'t restate it; the function or clinical relevance of a labeled structure when only the name is on the slide; identifying an unlabeled structure shown in the figure.',
+      '- Avoid: any term that appears in the slide\'s bullet points, headings, or captions; "what is structure X" when X\'s name is printed adjacent to it.',
+      '',
+      'Fallback when no usable figure exists: if no provided PDF page contains a figure suitable for the topic (or no PDFs were uploaded at all), you MAY write a text-described diagram question — describe the diagram clearly in the question stem (e.g. "Consider a coronal section of the kidney showing the renal cortex, medulla, and collecting system. Which structure …"). The described diagram and topic must still fit the course subject. Set pageReference and sourceFile to null in that case.',
+    ].join('\n')
+
+    const modeBlock = isMixed
+      ? `Mode: MIXED — produce a mix of theory and diagram questions. For EACH question, set the "mode" field to either "theory" or "diagram" so we know which it is. Aim for a roughly balanced mix unless one type fits the source material much better.\n\n${theoryDescription}\n\n${diagramDescription}`
+      : wantsDiagram
+        ? `Mode: DIAGRAM — every question must be a diagram question. Set "mode": "diagram" on every question.\n\n${diagramDescription}`
+        : `Mode: THEORY — every question is theory-style. Set "mode": "theory" on every question.\n\n${theoryDescription}`
+
     const systemPrompt = `You are an expert medical educator creating exam questions for a medical student.
 Generate exactly ${config.questionCount} questions about "${config.subject}".
 Difficulty: ${config.difficulty} (${config.difficulty === 'easy' ? 'foundational concepts' : config.difficulty === 'medium' ? 'clinical application' : 'complex reasoning and edge cases'}).
 Question types to include (mix them): ${selectedTypes}.
-Mode: ${config.mode === 'theory' ? 'Theory — focus on concepts, mechanisms, pathophysiology, pharmacology, anatomy' : 'Diagram — describe anatomical or clinical diagrams and ask the student to identify labeled structures or interpret findings'}.
+${modeBlock}
 
 Course materials provided: ${courseFileList}
 Past papers provided: ${pastFileList}
@@ -57,6 +81,7 @@ CRITICAL: Return ONLY a valid JSON array. No markdown, no backticks, no preamble
 Each question object must have this exact shape:
 {
   "type": "single" | "multiple" | "true-false" | "vignette",
+  "mode": "theory" | "diagram",
   "question": "Question text here",
   "options": [
     { "id": "a", "text": "Option text" },
@@ -76,15 +101,14 @@ Rules for question shape:
 - single questions have 4 options, one correct
 - multiple questions have 4-5 options with exactly 2 correct (never more, never fewer)
 - vignette questions begin with a patient scenario paragraph
-- diagram mode questions should describe a diagram or structure in the question stem
 - All explanations must be educational and specific
 - Do not number the questions, the id field handles ordering
 
 Rules for pageReference / sourceFile:
 - ONLY when course material is provided as a PDF and you can identify the page that supports the correct answer.
-- Use the page number you see in the PDF (1-indexed). A range "12-13" is allowed.
+- For diagram-mode questions backed by a real figure, give a SINGLE page number (not a range) — the page that actually contains the figure.
 - "sourceFile" must exactly match one of the provided course PDF filenames listed above.
-- If the answer is from your general knowledge or from non-PDF content, set pageReference and sourceFile to null.
+- If the answer is from your general knowledge, from non-PDF content, or you wrote a text-described diagram question, set both pageReference and sourceFile to null.
 - Never invent a page number.
 
 Rules for past papers (ONLY if past papers are provided):
@@ -202,10 +226,15 @@ ${hasPastQuestions ? '' : '- No past papers were provided in this run, so set "f
         ? q.sourceFile
         : undefined
       const { options, correctAnswers } = shuffleOptions(q.type, q.options, q.correctAnswers)
+      // For single-mode quizzes, default the per-question mode tag to that mode so the
+      // UI/render pipeline doesn't have to special-case missing tags.
+      const claudeMode = q.mode === 'theory' || q.mode === 'diagram' ? q.mode : undefined
+      const mode = claudeMode ?? (isMixed ? undefined : (wantsDiagram ? 'diagram' : 'theory'))
       return {
         ...q,
         options,
         correctAnswers,
+        mode,
         id: uuidv4(),
         pageReference: sourceFile ? pageReference : undefined,
         sourceFile,

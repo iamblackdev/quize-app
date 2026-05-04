@@ -109,7 +109,7 @@ export default function ResultsPage() {
             </div>
           </div>
           <p className="text-xs text-charcoal-light font-body mt-4 capitalize">
-            {session.config.difficulty} difficulty · {session.config.mode} mode
+            {session.config.difficulty} difficulty · {(Array.isArray(session.config.mode) ? session.config.mode : [session.config.mode]).join(' + ')} mode
           </p>
         </div>
 
@@ -168,6 +168,22 @@ export default function ResultsPage() {
 
                   {isExpanded && (
                     <div className="px-4 pb-5 space-y-2 border-t border-cream-200 pt-4 animate-fade-in">
+                      {q.imageData && (
+                        <figure className="mb-3 rounded-xl overflow-hidden border border-amber-light/40 bg-white">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={q.imageData}
+                            alt={q.imageDescription || 'Source page from your course material'}
+                            className="w-full h-auto block"
+                          />
+                          {q.sourceFile && q.pageReference && (
+                            <figcaption className="text-xs text-charcoal-light font-body px-3 py-2 bg-cream-50 border-t border-amber-light/30">
+                              From <em className="not-italic font-semibold">{q.sourceFile}</em>, page {q.pageReference}
+                            </figcaption>
+                          )}
+                        </figure>
+                      )}
+                      <p className="font-body text-sm text-charcoal-warm leading-relaxed mb-2">{q.question}</p>
                       {q.options.map((opt, oi) => {
                         const isSelected = answer?.selectedAnswers.includes(opt.id)
                         const isCorrectOpt = q.correctAnswers.includes(opt.id)

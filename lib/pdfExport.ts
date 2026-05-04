@@ -1,5 +1,14 @@
 import { QuizSession, QuizQuestion, QuizAnswer } from '@/types'
 
+function loadImage(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => resolve(img)
+    img.onerror = reject
+    img.src = src
+  })
+}
+
 export async function exportQuizToPDF(session: QuizSession): Promise<void> {
   const { jsPDF } = await import('jspdf')
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
@@ -102,7 +111,8 @@ export async function exportQuizToPDF(session: QuizSession): Promise<void> {
   drawText(`${correctCount} correct out of ${total} questions`, detailX, y + 19, { fontSize: 10, color: COLORS.mid })
 
   const diffLabel = session.config.difficulty.charAt(0).toUpperCase() + session.config.difficulty.slice(1)
-  const modeLabel = session.config.mode.charAt(0).toUpperCase() + session.config.mode.slice(1)
+  const modes = Array.isArray(session.config.mode) ? session.config.mode : [session.config.mode]
+  const modeLabel = modes.map(m => m.charAt(0).toUpperCase() + m.slice(1)).join(' + ')
   drawText(`Difficulty: ${diffLabel}  •  Mode: ${modeLabel}  •  ${session.config.questionTypes.join(', ')}`, detailX, y + 27, {
     fontSize: 8, color: COLORS.light
   })
@@ -120,7 +130,21 @@ export async function exportQuizToPDF(session: QuizSession): Promise<void> {
   y += 46
 
   // ── QUESTIONS ───────────────────────────────────────────
-  session.questions.forEach((q: QuizQuestion, idx: number) => {
+  // Pre-load all diagram images so layout is deterministic. Bad data URLs are
+  // dropped silently and the question renders without an image.
+  const imageBySrc = new Map<string, HTMLImageElement>()
+  for (const q of session.questions) {
+    if (q.imageData && !imageBySrc.has(q.imageData)) {
+      try {
+        imageBySrc.set(q.imageData, await loadImage(q.imageData))
+      } catch {
+        /* skip broken images */
+      }
+    }
+  }
+
+  for (let idx = 0; idx < session.questions.length; idx++) {
+    const q: QuizQuestion = session.questions[idx]
     const answer = session.answers.find((a: QuizAnswer) => a.questionId === q.id)
     const isCorrect = answer?.isCorrect ?? false
 
@@ -142,6 +166,32 @@ export async function exportQuizToPDF(session: QuizSession): Promise<void> {
     doc.text(isCorrect ? '✓ Correct' : '✗ Incorrect', PAGE_W - MARGIN - 3, y + 6, { align: 'right' })
 
     y += 12
+
+    // Diagram image (rendered from the source PDF page) — only for questions
+    // that have one attached (diagram mode). Sized to fit content width with a
+    // soft height cap so it never dominates the page.
+    const img = q.imageData ? imageBySrc.get(q.imageData) : undefined
+    if (img && q.imageData) {
+      const MAX_IMG_H = 100
+      const aspect = img.naturalHeight / img.naturalWidth
+      let imgW = CONTENT_W
+      let imgH = imgW * aspect
+      if (imgH > MAX_IMG_H) {
+        imgH = MAX_IMG_H
+        imgW = imgH / aspect
+      }
+      checkPageBreak(imgH + 6)
+      const imgX = MARGIN + (CONTENT_W - imgW) / 2
+      doc.addImage(q.imageData, 'JPEG', imgX, y, imgW, imgH)
+      if (q.sourceFile && q.pageReference) {
+        drawText(`From ${q.sourceFile}, page ${q.pageReference}`, MARGIN + 2, y + imgH + 4, {
+          fontSize: 7, color: COLORS.light,
+        })
+        y += imgH + 7
+      } else {
+        y += imgH + 4
+      }
+    }
 
     // Question text
     const questionLines = doc.splitTextToSize(q.question, CONTENT_W - 4)
@@ -245,7 +295,7 @@ export async function exportQuizToPDF(session: QuizSession): Promise<void> {
     }
 
     y += 4
-  })
+  }
 
   // ── FOOTER on last page ──────────────────────────────────
   checkPageBreak(16)

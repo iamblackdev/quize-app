@@ -164,7 +164,7 @@ export default function QuizPage() {
             <span className="text-xl">🩺</span>
             <div className="min-w-0">
               <h1 className="font-display font-bold text-charcoal-warm text-sm truncate">{session.config.subject}</h1>
-              <p className="text-xs text-charcoal-light font-body capitalize">{session.config.difficulty} · {session.config.mode}</p>
+              <p className="text-xs text-charcoal-light font-body capitalize">{session.config.difficulty} · {(Array.isArray(session.config.mode) ? session.config.mode : [session.config.mode]).join(' + ')}</p>
             </div>
           </div>
           <button onClick={handlePause} className="btn-ghost text-sm py-1.5 flex-shrink-0">
@@ -191,6 +191,23 @@ export default function QuizPage() {
               <span className="text-xs text-charcoal-light font-body">Select all that apply</span>
             )}
           </div>
+
+          {/* Diagram (rendered from the source PDF page) */}
+          {currentQ.imageData && (
+            <figure className="mb-5 rounded-xl overflow-hidden border border-amber-light/40 bg-white">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={currentQ.imageData}
+                alt={currentQ.imageDescription || 'Source page from your course material'}
+                className="w-full h-auto block"
+              />
+              {currentQ.sourceFile && currentQ.pageReference && (
+                <figcaption className="text-xs text-charcoal-light font-body px-3 py-2 bg-cream-50 border-t border-amber-light/30">
+                  From <em className="not-italic font-semibold">{currentQ.sourceFile}</em>, page {currentQ.pageReference}
+                </figcaption>
+              )}
+            </figure>
+          )}
 
           {/* Question text */}
           <h2 className="font-body text-base md:text-lg leading-relaxed text-charcoal-warm mb-6">
