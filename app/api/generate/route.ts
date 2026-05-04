@@ -74,7 +74,7 @@ Each question object must have this exact shape:
 Rules for question shape:
 - true-false questions have exactly 2 options: { id: "a", text: "True" } and { id: "b", text: "False" }
 - single questions have 4 options, one correct
-- multiple questions have 4-5 options, 2-3 correct
+- multiple questions have 4-5 options with exactly 2 correct (never more, never fewer)
 - vignette questions begin with a patient scenario paragraph
 - diagram mode questions should describe a diagram or structure in the question stem
 - All explanations must be educational and specific
@@ -201,8 +201,11 @@ ${hasPastQuestions ? '' : '- No past papers were provided in this run, so set "f
       const sourceFile = typeof q.sourceFile === 'string' && courseFileNames.has(q.sourceFile)
         ? q.sourceFile
         : undefined
+      const { options, correctAnswers } = shuffleOptions(q.type, q.options, q.correctAnswers)
       return {
         ...q,
+        options,
+        correctAnswers,
         id: uuidv4(),
         pageReference: sourceFile ? pageReference : undefined,
         sourceFile,
@@ -213,9 +216,102 @@ ${hasPastQuestions ? '' : '- No past papers were provided in this run, so set "f
     return NextResponse.json({ questions })
   } catch (err) {
     console.error('Generate error:', err)
-    const message = err instanceof Error ? err.message : 'Failed to generate questions'
-    return NextResponse.json({ error: message }, { status: 500 })
+    const { message, status } = explainGenerateError(err)
+    return NextResponse.json({ error: message }, { status })
   }
+}
+
+function explainGenerateError(err: unknown): { message: string; status: number } {
+  if (err instanceof Anthropic.APIError) {
+    const raw = (err.message || '').toLowerCase()
+    const apiStatus = typeof err.status === 'number' ? err.status : 500
+
+    if (apiStatus === 413 || raw.includes('request too large') || raw.includes('payload too large')) {
+      return {
+        message: 'Your upload is too large for Claude to process in one go. The total of all uploaded PDFs and images must be under 32 MB. Try removing some files, or split a long PDF into smaller parts.',
+        status: 413,
+      }
+    }
+
+    if (raw.includes('page')) {
+      return {
+        message: 'One of your PDFs has too many pages for Claude to process. The current limit is 100 pages per PDF. Please split it into smaller PDFs (e.g. by chapter) and upload those instead.',
+        status: 400,
+      }
+    }
+
+    if (raw.includes('size') || raw.includes('too large') || raw.includes('32 mb') || raw.includes('32mb')) {
+      return {
+        message: 'One of your uploaded files is over the 32 MB size limit. Please compress it or split it into smaller files and try again.',
+        status: 400,
+      }
+    }
+
+    if (apiStatus === 429) {
+      return {
+        message: 'Claude is rate-limiting requests right now. Please wait a moment and try again.',
+        status: 429,
+      }
+    }
+
+    if (apiStatus === 401 || apiStatus === 403) {
+      return {
+        message: 'The Anthropic API key is missing or not authorized. Please check your server configuration.',
+        status: apiStatus,
+      }
+    }
+
+    return {
+      message: `Claude couldn't process your request: ${err.message}`,
+      status: apiStatus,
+    }
+  }
+
+  if (err instanceof SyntaxError) {
+    return {
+      message: 'Claude returned an unexpected response format. Please try again — sometimes a retry is enough.',
+      status: 502,
+    }
+  }
+
+  const message = err instanceof Error ? err.message : 'Failed to generate questions'
+  return { message, status: 500 }
+}
+
+// Claude tends to anchor on the example schema and make "a" the correct answer
+// disproportionately often. We shuffle option positions server-side so the
+// correct answer is uniformly distributed across slots, regardless of the order
+// Claude returned them in.
+function shuffleOptions(
+  type: QuizQuestion['type'],
+  options: QuizQuestion['options'],
+  correctAnswers: string[],
+): { options: QuizQuestion['options']; correctAnswers: string[] } {
+  if (!Array.isArray(options) || options.length === 0) {
+    return { options: options ?? [], correctAnswers: correctAnswers ?? [] }
+  }
+  // True/false has fixed semantics ("a" = True, "b" = False); shuffling would
+  // make the labels nonsensical.
+  if (type === 'true-false') {
+    return { options, correctAnswers }
+  }
+
+  const correctSet = new Set(correctAnswers ?? [])
+  const correctTexts = new Set(
+    options.filter(o => correctSet.has(o.id)).map(o => o.text),
+  )
+
+  const shuffled = [...options]
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]]
+  }
+
+  const letters = ['a', 'b', 'c', 'd', 'e', 'f']
+  const newOptions = shuffled.map((o, i) => ({ id: letters[i] ?? o.id, text: o.text }))
+  const newCorrectAnswers = newOptions.filter(o => correctTexts.has(o.text)).map(o => o.id)
+
+  return { options: newOptions, correctAnswers: newCorrectAnswers }
 }
 
 function extractJsonArray(raw: string): string {

@@ -44,6 +44,30 @@ async function filesToPayload(files: File[]) {
 
 const ACCEPT = '.pdf,image/jpeg,image/png,image/webp'
 
+// Anthropic's PDF / image limits — keep in sync with the API route.
+const MAX_FILE_BYTES = 32 * 1024 * 1024 // 32 MB per file
+const MAX_TOTAL_BYTES = 32 * 1024 * 1024 // 32 MB total request payload
+
+function formatMB(bytes: number) {
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function validateUploads(courseFiles: File[], pastFiles: File[]): string | null {
+  const all = [...courseFiles, ...pastFiles]
+
+  const oversized = all.find(f => f.size > MAX_FILE_BYTES)
+  if (oversized) {
+    return `"${oversized.name}" is ${formatMB(oversized.size)}, which is over Claude's 32 MB per-file limit. Please compress it or split it into smaller PDFs.`
+  }
+
+  const totalBytes = all.reduce((sum, f) => sum + f.size, 0)
+  if (totalBytes > MAX_TOTAL_BYTES) {
+    return `Your uploads total ${formatMB(totalBytes)}, which is over Claude's 32 MB per-request limit. Try removing some files or splitting long PDFs.`
+  }
+
+  return null
+}
+
 export default function SetupPage() {
   const router = useRouter()
   const courseFileRef = useRef<HTMLInputElement>(null)
@@ -97,6 +121,9 @@ export default function SetupPage() {
     if (!subject.trim()) { setError('Please enter a subject or course name'); return }
     if (selectedTypes.length === 0) { setError('Select at least one question type'); return }
 
+    const sizeError = validateUploads(uploadedFiles, pastQuestionsFiles)
+    if (sizeError) { setError(sizeError); return }
+
     setLoading(true)
     setError('')
 
@@ -135,7 +162,10 @@ export default function SetupPage() {
         }),
       })
 
-      if (!res.ok) throw new Error('Generation failed')
+      if (!res.ok) {
+        const body = await res.json().catch(() => null) as { error?: string } | null
+        throw new Error(body?.error || 'Something went wrong generating your quiz. Please try again.')
+      }
       const { questions } = await res.json()
 
       const sessionId = uuidv4()
@@ -154,7 +184,7 @@ export default function SetupPage() {
 
       router.push(`/quiz/${sessionId}`)
     } catch (e) {
-      setError('Something went wrong generating your quiz. Please try again.')
+      setError(e instanceof Error ? e.message : 'Something went wrong generating your quiz. Please try again.')
     } finally {
       clearInterval(interval)
       setLoading(false)
