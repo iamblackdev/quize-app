@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import Anthropic from '@anthropic-ai/sdk'
+import { del } from '@vercel/blob'
 import { QuizConfig, QuizQuestion } from '@/types'
 import { v4 as uuidv4 } from 'uuid'
 
@@ -11,22 +12,46 @@ type UploadedFile = {
   name: string
 }
 
+type BlobRef = {
+  url: string
+  type: string
+  name: string
+}
+
 export const maxDuration = 120
 
+async function fetchBlobAsBase64(ref: BlobRef): Promise<UploadedFile> {
+  const res = await fetch(ref.url)
+  if (!res.ok) {
+    throw new Error(`Failed to fetch uploaded file "${ref.name}" (status ${res.status})`)
+  }
+  const buf = Buffer.from(await res.arrayBuffer())
+  return { data: buf.toString('base64'), type: ref.type, name: ref.name }
+}
+
 export async function POST(req: NextRequest) {
+  let blobUrlsToCleanup: string[] = []
+
   try {
     const body = await req.json()
     const {
       config,
       contextText,
-      files,
-      pastQuestionsFiles,
+      fileRefs = [],
+      pastQuestionsFileRefs = [],
     } = body as {
       config: QuizConfig
       contextText?: string
-      files?: UploadedFile[]
-      pastQuestionsFiles?: UploadedFile[]
+      fileRefs?: BlobRef[]
+      pastQuestionsFileRefs?: BlobRef[]
     }
+
+    blobUrlsToCleanup = [...fileRefs, ...pastQuestionsFileRefs].map(r => r.url)
+
+    const [files, pastQuestionsFiles] = await Promise.all([
+      Promise.all(fileRefs.map(fetchBlobAsBase64)),
+      Promise.all(pastQuestionsFileRefs.map(fetchBlobAsBase64)),
+    ])
 
     const typeDescriptions: Record<string, string> = {
       single: 'single best answer MCQ (one correct option)',
@@ -203,7 +228,7 @@ ${hasPastQuestions ? '' : '- No past papers were provided in this run, so set "f
 
     const message = await client.messages.create({
       model: 'claude-opus-4-5',
-      max_tokens: 8192,
+      max_tokens: 16384,
       system: systemPrompt,
       messages: [{ role: 'user', content: userContent as unknown as Anthropic.MessageParam['content'] }],
     })
@@ -247,6 +272,12 @@ ${hasPastQuestions ? '' : '- No past papers were provided in this run, so set "f
     console.error('Generate error:', err)
     const { message, status } = explainGenerateError(err)
     return NextResponse.json({ error: message }, { status })
+  } finally {
+    if (blobUrlsToCleanup.length > 0) {
+      // Best-effort cleanup — these blobs were only needed for this single
+      // generation request. Failure to delete shouldn't block the response.
+      del(blobUrlsToCleanup).catch(err => console.warn('Blob cleanup failed:', err))
+    }
   }
 }
 
