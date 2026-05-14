@@ -18,7 +18,7 @@ const QUESTION_TYPES: { id: QuestionType; label: string; desc: string; icon: str
 
 const DIFFICULTIES: { id: Difficulty; label: string; desc: string; color: string }[] = [
 	{ id: 'easy', label: 'Easy', desc: 'Foundational concepts', color: 'border-green-300 bg-green-50 text-green-700' },
-	{ id: 'medium', label: 'Medium', desc: 'Clinical application', color: 'border-amber-300 bg-amber-50 text-amber-700' },
+	{ id: 'medium', label: 'Medium', desc: 'Applied understanding', color: 'border-amber-300 bg-amber-50 text-amber-700' },
 	{ id: 'hard', label: 'Hard', desc: 'Complex reasoning', color: 'border-rose-300 bg-rose-50 text-rose-warm' },
 ];
 

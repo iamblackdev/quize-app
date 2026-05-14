@@ -95,7 +95,7 @@ export async function POST(req: NextRequest) {
 
     const systemPrompt = `You are an expert medical educator creating exam questions for a medical student.
 Generate exactly ${config.questionCount} questions about "${config.subject}".
-Difficulty: ${config.difficulty} (${config.difficulty === 'easy' ? 'foundational concepts' : config.difficulty === 'medium' ? 'clinical application' : 'complex reasoning and edge cases'}).
+Difficulty: ${config.difficulty} (${config.difficulty === 'easy' ? 'foundational concepts and direct recall' : config.difficulty === 'medium' ? 'applied understanding — go beyond rote recall to test whether the student can use the concept, but keep the framing academic, not a patient-presentation case' : 'complex reasoning and edge cases'}).
 Question types to include (mix them): ${selectedTypes}.
 ${modeBlock}
 
